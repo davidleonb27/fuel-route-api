@@ -1,7 +1,7 @@
 import pytest
 
 from fuel.services.geocoding import GeocodingError, geocode, lookup_place
-from fuel.services.names import normalize_place_name, normalize_state
+from fuel.services.names import normalize_place_name, normalize_state, place_key
 
 
 @pytest.mark.parametrize(
@@ -47,3 +47,22 @@ def test_geocode_city_state_offline(query):
 def test_geocode_rejects_points_outside_usa():
     with pytest.raises(GeocodingError):
         geocode("48.85,2.35")
+
+
+def test_place_key_ignores_spacing_variants():
+    assert place_key("Mc Calla") == place_key("McCalla")
+    assert place_key("De Forest") == place_key("DeForest")
+
+
+@pytest.mark.parametrize(
+    ("city", "state"),
+    [
+        ("Boise", "ID"),
+        ("Lexington", "KY"),
+        ("Macon", "GA"),
+        ("Canon City", "CO"),
+        ("Mc Calla", "AL"),
+    ],
+)
+def test_lookup_place_handles_census_naming_quirks(city, state):
+    assert lookup_place(city, state) is not None

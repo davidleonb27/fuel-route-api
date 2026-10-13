@@ -9,7 +9,7 @@ from django.conf import settings
 from django.core.cache import cache
 
 from .http import get_json
-from .names import normalize_place_name, normalize_state
+from .names import normalize_place_name, normalize_state, place_key
 
 # Contiguous US + Alaska; Hawaii is unreachable by road so it is rejected.
 _US_BOUNDS = ((24.0, 50.0, -125.0, -66.5), (51.0, 71.5, -170.0, -129.0))
@@ -55,7 +55,7 @@ def lookup_place(city: str, state: str) -> tuple[float, float] | None:
     code = normalize_state(state)
     if not code:
         return None
-    return place_index().get((code, normalize_place_name(city)))
+    return place_index().get((code, place_key(city)))
 
 
 def _split_city_state(query: str) -> tuple[str, str] | None:
@@ -86,7 +86,10 @@ def geocode(query: str) -> tuple[Location, int]:
 
     if split := _split_city_state(query):
         city, state = split
-        if coords := lookup_place(city, state):
+        coords = lookup_place(city, state)
+        if coords and not in_usa(*coords):
+            raise GeocodingError(f"'{query}' is not reachable by road from the mainland USA")
+        if coords:
             code = normalize_state(state)
             label = f"{city.strip().title()}, {code}"
             return Location(query, label, *coords, "census_place"), 0

@@ -82,6 +82,11 @@ def normalize_place_name(name: str, strip_census_suffix: bool = False) -> str:
     return " ".join(tokens)
 
 
+def place_key(name: str, strip_census_suffix: bool = False) -> str:
+    # Spaces dropped so "Mc Calla"/"McCalla" and "De Forest"/"DeForest" collide.
+    return normalize_place_name(name, strip_census_suffix).replace(" ", "")
+
+
 def normalize_state(value: str) -> str | None:
     cleaned = _ascii_lower(value).strip().strip(".")
     if len(cleaned) == 2 and cleaned.upper() in US_STATES:

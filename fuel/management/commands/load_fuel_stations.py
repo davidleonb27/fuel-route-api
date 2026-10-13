@@ -1,6 +1,5 @@
 import csv
 import time
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from django.conf import settings
@@ -10,23 +9,29 @@ from django.db import transaction
 from fuel.models import FuelStation
 from fuel.services.geocoding import in_usa, lookup_place
 from fuel.services.http import UpstreamServiceError, get_json
-from fuel.services.names import normalize_state
+from fuel.services.ingest import IngestError, StationRecord, read_fuel_csv
+from fuel.services.names import place_key
 
-COLUMNS = {
-    "opis_id": "OPIS Truckstop ID",
-    "name": "Truckstop Name",
-    "address": "Address",
-    "city": "City",
-    "state": "State",
-    "rack_id": "Rack ID",
-    "price": "Retail Price",
-}
+UPDATE_FIELDS = [
+    "name",
+    "address",
+    "city",
+    "state",
+    "rack_id",
+    "price",
+    "price_min",
+    "price_max",
+    "price_observations",
+    "latitude",
+    "longitude",
+    "geo_source",
+]
 
 
 class Command(BaseCommand):
     help = (
-        "Loads the fuel price CSV into the database and geocodes each station offline "
-        "from US Census place centroids. Use --nominatim to resolve the few leftovers online."
+        "Cleans and loads the fuel price CSV, geocodes stations offline from US Census "
+        "place centroids, and prints a data-quality report. Safe to re-run."
     )
 
     def add_arguments(self, parser):
@@ -34,78 +39,91 @@ class Command(BaseCommand):
         parser.add_argument(
             "--nominatim",
             action="store_true",
-            help="Geocode stations the Census index could not match (1 request/second).",
+            help="Geocode cities the Census index can't match (1 req/s) and save the results "
+            "to data/station_geocodes.csv so later loads stay offline.",
+        )
+        parser.add_argument(
+            "--dry-run", action="store_true", help="Report only; don't touch the database."
         )
 
-    def handle(self, *args, file: Path, nominatim: bool, **options):
+    def handle(self, *args, file: Path, nominatim: bool, dry_run: bool, **options):
         if not file.exists():
             raise CommandError(f"{file} not found")
+        try:
+            records, report = read_fuel_csv(file)
+        except IngestError as exc:
+            raise CommandError(str(exc)) from exc
 
-        stations = self._read(file)
-        unmatched = []
-        for station in stations.values():
-            coords = lookup_place(station.city, station.state)
-            if coords:
-                station.latitude, station.longitude = coords
-                station.geo_source = FuelStation.GeoSource.CENSUS_PLACE
-            else:
-                unmatched.append(station)
-
+        stations = [self._to_model(record) for record in records]
+        overrides = _load_overrides()
+        unmatched = [s for s in stations if not self._geocode_offline(s, overrides)]
         if nominatim and unmatched:
-            self._geocode_online(unmatched)
+            self._geocode_online(unmatched, overrides)
+            unmatched = [s for s in unmatched if s.latitude is None]
+
+        for line in report.lines():
+            self.stdout.write(f"  {line}")
+        located = len(stations) - len(unmatched)
+        self.stdout.write(f"  geocoded: {located}/{len(stations)}")
+        if unmatched:
+            places = sorted({f"{s.city}, {s.state}" for s in unmatched})
+            self.stdout.write(f"  not located (ignored by the planner): {places}")
+        if dry_run:
+            self.stdout.write(self.style.WARNING("Dry run: database unchanged."))
+            return
 
         with transaction.atomic():
-            FuelStation.objects.all().delete()
-            FuelStation.objects.bulk_create(stations.values(), batch_size=1000)
+            FuelStation.objects.bulk_create(
+                stations,
+                batch_size=500,
+                update_conflicts=True,
+                unique_fields=["opis_id"],
+                update_fields=UPDATE_FIELDS,
+            )
+            removed, _ = FuelStation.objects.exclude(
+                opis_id__in=[s.opis_id for s in stations]
+            ).delete()
 
-        located = sum(1 for s in stations.values() if s.latitude is not None)
         self.stdout.write(
             self.style.SUCCESS(
-                f"Loaded {len(stations)} unique stations, {located} geocoded "
-                f"({len(stations) - located} without coordinates are skipped by the planner)."
+                f"Loaded {len(stations)} stations ({removed} no longer in the file removed)."
             )
         )
 
-    def _read(self, file: Path) -> dict[int, FuelStation]:
-        stations: dict[int, FuelStation] = {}
-        with file.open(encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
-            missing = set(COLUMNS.values()) - {name.strip() for name in reader.fieldnames or []}
-            if missing:
-                raise CommandError(f"CSV is missing columns: {sorted(missing)}")
-            for line, raw in enumerate(reader, start=2):
-                row = {key: (raw.get(column) or "").strip() for key, column in COLUMNS.items()}
-                try:
-                    opis_id = int(row["opis_id"])
-                    price = Decimal(row["price"])
-                except (ValueError, InvalidOperation):
-                    self.stderr.write(f"Skipping line {line}: bad id or price")
-                    continue
-                state = normalize_state(row["state"])
-                if not state or price <= 0:
-                    continue
-                # The same truck stop appears several times; keep its lowest posted price.
-                existing = stations.get(opis_id)
-                if existing and existing.price <= price:
-                    continue
-                stations[opis_id] = FuelStation(
-                    opis_id=opis_id,
-                    name=row["name"],
-                    address=row["address"],
-                    city=row["city"],
-                    state=state,
-                    rack_id=int(row["rack_id"]) if row["rack_id"].isdigit() else None,
-                    price=price,
-                )
-        return stations
+    @staticmethod
+    def _to_model(record: StationRecord) -> FuelStation:
+        return FuelStation(
+            opis_id=record.opis_id,
+            name=record.name,
+            address=record.address,
+            city=record.city,
+            state=record.state,
+            rack_id=record.rack_id,
+            price=record.price,
+            price_min=record.price_min,
+            price_max=record.price_max,
+            price_observations=record.observations,
+        )
 
-    def _geocode_online(self, stations: list[FuelStation]) -> None:
+    @staticmethod
+    def _geocode_offline(station: FuelStation, overrides: dict) -> bool:
+        if coords := lookup_place(station.city, station.state):
+            station.latitude, station.longitude = coords
+            station.geo_source = FuelStation.GeoSource.CENSUS_PLACE
+            return True
+        if coords := overrides.get((station.state, place_key(station.city))):
+            station.latitude, station.longitude = coords
+            station.geo_source = FuelStation.GeoSource.NOMINATIM
+            return True
+        return False
+
+    def _geocode_online(self, stations: list[FuelStation], overrides: dict) -> None:
         by_city: dict[tuple[str, str], list[FuelStation]] = {}
         for station in stations:
-            by_city.setdefault((station.city.lower(), station.state), []).append(station)
+            by_city.setdefault((station.state, station.city), []).append(station)
 
         self.stdout.write(f"Geocoding {len(by_city)} unmatched cities with Nominatim...")
-        for (city, state), group in by_city.items():
+        for (state, city), group in by_city.items():
             try:
                 results = get_json(
                     f"{settings.FUEL['NOMINATIM_BASE_URL']}/search",
@@ -123,7 +141,29 @@ class Command(BaseCommand):
             if results:
                 lat, lng = float(results[0]["lat"]), float(results[0]["lon"])
                 if in_usa(lat, lng):
+                    overrides[(state, place_key(city))] = (lat, lng)
                     for station in group:
                         station.latitude, station.longitude = lat, lng
                         station.geo_source = FuelStation.GeoSource.NOMINATIM
             time.sleep(1.0)  # Nominatim usage policy: max 1 request per second
+        _save_overrides(overrides)
+
+
+def _load_overrides() -> dict[tuple[str, str], tuple[float, float]]:
+    path = settings.FUEL["STATION_GEOCODES_FILE"]
+    if not path.exists():
+        return {}
+    with path.open(encoding="utf-8", newline="") as handle:
+        return {
+            (row["state"], row["key"]): (float(row["lat"]), float(row["lng"]))
+            for row in csv.DictReader(handle)
+        }
+
+
+def _save_overrides(overrides) -> None:
+    # Committed to the repo so later loads never need the network.
+    with settings.FUEL["STATION_GEOCODES_FILE"].open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["state", "key", "lat", "lng"])
+        for (state, key), (lat, lng) in sorted(overrides.items()):
+            writer.writerow([state, key, f"{lat:.6f}", f"{lng:.6f}"])

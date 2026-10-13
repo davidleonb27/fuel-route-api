@@ -1,16 +1,30 @@
 import csv
 import gzip
+import re
 from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from fuel.services.names import US_STATES, normalize_place_name
+from fuel.services.names import US_STATES, normalize_place_name, place_key
 
 # Lower rank wins when two Census entries normalise to the same name in a state.
 RANK_INCORPORATED_PLACE = 0
 RANK_OTHER_PLACE = 1
 RANK_COUNTY_SUBDIVISION = 2
+RANK_ALIAS = 3
+
+
+def _aliases(raw_name: str, rank: int):
+    full = normalize_place_name(raw_name, strip_census_suffix=True)
+    yield place_key(full), rank
+    # Consolidated governments: "Lexington-Fayette urban county", "Macon-Bibb County"
+    head = re.split(r"[-/]", raw_name, maxsplit=1)[0]
+    if head != raw_name:
+        yield place_key(head, strip_census_suffix=True), RANK_ALIAS
+    # "Boise City city" is just "Boise" to everyone else
+    if full.endswith(" city"):
+        yield place_key(full.removesuffix(" city")), RANK_ALIAS
 
 
 class Command(BaseCommand):
@@ -38,39 +52,20 @@ class Command(BaseCommand):
         for path, is_place in ((places, True), (cousubs, False)):
             if path is None:
                 continue
-            with path.open(encoding="latin-1", newline="") as handle:
+            with path.open(encoding="utf-8", newline="") as handle:
                 reader = csv.DictReader(handle, delimiter="|")
                 reader.fieldnames = [name.strip() for name in reader.fieldnames]
                 for row in reader:
                     if is_place:
-                        rank = (
-                            RANK_INCORPORATED_PLACE if row["FUNCSTAT"] == "A" else RANK_OTHER_PLACE
-                        )
+                        incorporated = row["FUNCSTAT"] == "A"
+                        rank = RANK_INCORPORATED_PLACE if incorporated else RANK_OTHER_PLACE
                     else:
                         rank = RANK_COUNTY_SUBDIVISION
                     lat, lng = float(row["INTPTLAT"]), float(row["INTPTLONG"])
                     land_area = float(row["ALAND_SQMI"] or 0)
                     state = row["USPS"].strip()
-                    raw_name = row["NAME"]
-                    consider(
-                        state,
-                        normalize_place_name(raw_name, strip_census_suffix=True),
-                        rank,
-                        land_area,
-                        lat,
-                        lng,
-                    )
-                    if "(balance)" in raw_name:
-                        # "Louisville/Jefferson County metro government (balance)" -> "louisville"
-                        head = raw_name.replace("/", "-").split("-")[0]
-                        consider(
-                            state,
-                            normalize_place_name(head, strip_census_suffix=True),
-                            rank,
-                            land_area,
-                            lat,
-                            lng,
-                        )
+                    for alias, alias_rank in _aliases(row["NAME"], rank):
+                        consider(state, alias, alias_rank, land_area, lat, lng)
 
         output.parent.mkdir(parents=True, exist_ok=True)
         with gzip.open(output, "wt", encoding="utf-8", newline="") as handle:

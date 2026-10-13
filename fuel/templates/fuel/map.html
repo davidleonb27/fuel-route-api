@@ -52,8 +52,12 @@
   <script>
     const data = JSON.parse(document.getElementById("plan-geojson").textContent);
     const map = L.map("map").setView([39.5, -98.35], 4);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 18, attribution: "&copy; OpenStreetMap contributors"
+    // OSM's tile policy rejects requests without a Referer, and Django's default
+    // Referrer-Policy (same-origin) strips it for cross-origin tile requests.
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      referrerPolicy: "strict-origin-when-cross-origin",
+      attribution: "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors",
     }).addTo(map);
     const colors = { start: "#0e9f6e", finish: "#c81e1e", fuel_stop: "#1c64f2" };
     const layer = L.geoJSON(data, {

@@ -1,0 +1,532 @@
+{
+  "info": {
+    "name": "Fuel Route Optimizer API",
+    "description": "Route between two US locations with the cheapest fuel stops (500 mi range, 10 MPG).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/health/",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "health",
+            ""
+          ]
+        },
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Plan: New York to Los Angeles (GET)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan/?start=New York, NY&finish=Los Angeles, CA",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan",
+            ""
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "New York, NY"
+            },
+            {
+              "key": "finish",
+              "value": "Los Angeles, CA"
+            }
+          ]
+        },
+        "description": "Coast to coast. Send twice: the second response comes from cache with meta.cached = true and 0 API calls."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test(\"At most one routing API call\", () => pm.expect(body.meta.routing_api_calls).to.be.at.most(1));",
+              "pm.test(\"No stop buys more than a 50 gallon tank\", () => body.fuel_stops.forEach(s => pm.expect(s.gallons).to.be.at.most(50)));",
+              "pm.test(\"Total cost equals the sum of stops\", () => {",
+              "  const sum = body.fuel_stops.reduce((a, s) => a + s.cost, 0);",
+              "  pm.expect(Math.abs(sum - body.summary.total_fuel_cost)).to.be.below(0.05);",
+              "});",
+              "pm.test(\"Fuel bought plus starting fuel covers the trip at 10 MPG\", () => pm.expect(Math.abs(body.summary.gallons_purchased + body.vehicle.initial_fuel_gallons - body.route.distance_miles / 10)).to.be.below(0.6));",
+              "console.log(`Total $${body.summary.total_fuel_cost} over ${body.summary.number_of_stops} stops, ${pm.response.responseTime} ms`);",
+              "console.log(\"Map:\", body.map_url);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Plan: Chicago to Houston (POST JSON)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan/",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan",
+            ""
+          ]
+        },
+        "description": "",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"start\": \"Chicago, IL\",\n  \"finish\": \"Houston, TX\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test(\"At most one routing API call\", () => pm.expect(body.meta.routing_api_calls).to.be.at.most(1));",
+              "pm.test(\"No stop buys more than a 50 gallon tank\", () => body.fuel_stops.forEach(s => pm.expect(s.gallons).to.be.at.most(50)));",
+              "pm.test(\"Total cost equals the sum of stops\", () => {",
+              "  const sum = body.fuel_stops.reduce((a, s) => a + s.cost, 0);",
+              "  pm.expect(Math.abs(sum - body.summary.total_fuel_cost)).to.be.below(0.05);",
+              "});",
+              "pm.test(\"Fuel bought plus starting fuel covers the trip at 10 MPG\", () => pm.expect(Math.abs(body.summary.gallons_purchased + body.vehicle.initial_fuel_gallons - body.route.distance_miles / 10)).to.be.below(0.6));",
+              "console.log(`Total $${body.summary.total_fuel_cost} over ${body.summary.number_of_stops} stops, ${pm.response.responseTime} ms`);",
+              "console.log(\"Map:\", body.map_url);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Plan: cheapest possible (stop_cost = 0)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan/",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan",
+            ""
+          ]
+        },
+        "description": "Pure minimum fuel spend. Compare the number of stops with the default request.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"start\": \"New York, NY\",\n  \"finish\": \"Los Angeles, CA\",\n  \"stop_cost\": 0\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test(\"At most one routing API call\", () => pm.expect(body.meta.routing_api_calls).to.be.at.most(1));",
+              "pm.test(\"No stop buys more than a 50 gallon tank\", () => body.fuel_stops.forEach(s => pm.expect(s.gallons).to.be.at.most(50)));",
+              "pm.test(\"Total cost equals the sum of stops\", () => {",
+              "  const sum = body.fuel_stops.reduce((a, s) => a + s.cost, 0);",
+              "  pm.expect(Math.abs(sum - body.summary.total_fuel_cost)).to.be.below(0.05);",
+              "});",
+              "pm.test(\"Fuel bought plus starting fuel covers the trip at 10 MPG\", () => pm.expect(Math.abs(body.summary.gallons_purchased + body.vehicle.initial_fuel_gallons - body.route.distance_miles / 10)).to.be.below(0.6));",
+              "console.log(`Total $${body.summary.total_fuel_cost} over ${body.summary.number_of_stops} stops, ${pm.response.responseTime} ms`);",
+              "console.log(\"Map:\", body.map_url);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Plan: with fuel already in the tank",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan/",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan",
+            ""
+          ]
+        },
+        "description": "",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"start\": \"Seattle, WA\",\n  \"finish\": \"Miami, FL\",\n  \"initial_fuel_gallons\": 30\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test(\"At most one routing API call\", () => pm.expect(body.meta.routing_api_calls).to.be.at.most(1));",
+              "pm.test(\"No stop buys more than a 50 gallon tank\", () => body.fuel_stops.forEach(s => pm.expect(s.gallons).to.be.at.most(50)));",
+              "pm.test(\"Total cost equals the sum of stops\", () => {",
+              "  const sum = body.fuel_stops.reduce((a, s) => a + s.cost, 0);",
+              "  pm.expect(Math.abs(sum - body.summary.total_fuel_cost)).to.be.below(0.05);",
+              "});",
+              "pm.test(\"Fuel bought plus starting fuel covers the trip at 10 MPG\", () => pm.expect(Math.abs(body.summary.gallons_purchased + body.vehicle.initial_fuel_gallons - body.route.distance_miles / 10)).to.be.below(0.6));",
+              "console.log(`Total $${body.summary.total_fuel_cost} over ${body.summary.number_of_stops} stops, ${pm.response.responseTime} ms`);",
+              "console.log(\"Map:\", body.map_url);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Plan: coordinates and a street address",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan/?start=1600 Pennsylvania Ave NW, Washington, DC&finish=39.7392,-104.9903",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan",
+            ""
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "1600 Pennsylvania Ave NW, Washington, DC"
+            },
+            {
+              "key": "finish",
+              "value": "39.7392,-104.9903"
+            }
+          ]
+        },
+        "description": "Street addresses fall back to Nominatim (meta.geocoding_api_calls = 1); coordinates need no geocoding."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test(\"At most one routing API call\", () => pm.expect(body.meta.routing_api_calls).to.be.at.most(1));",
+              "pm.test(\"No stop buys more than a 50 gallon tank\", () => body.fuel_stops.forEach(s => pm.expect(s.gallons).to.be.at.most(50)));",
+              "pm.test(\"Total cost equals the sum of stops\", () => {",
+              "  const sum = body.fuel_stops.reduce((a, s) => a + s.cost, 0);",
+              "  pm.expect(Math.abs(sum - body.summary.total_fuel_cost)).to.be.below(0.05);",
+              "});",
+              "pm.test(\"Fuel bought plus starting fuel covers the trip at 10 MPG\", () => pm.expect(Math.abs(body.summary.gallons_purchased + body.vehicle.initial_fuel_gallons - body.route.distance_miles / 10)).to.be.below(0.6));",
+              "console.log(`Total $${body.summary.total_fuel_cost} over ${body.summary.number_of_stops} stops, ${pm.response.responseTime} ms`);",
+              "console.log(\"Map:\", body.map_url);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Plan: short trip (one stop)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan/?start=Austin, TX&finish=Dallas, TX",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan",
+            ""
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "Austin, TX"
+            },
+            {
+              "key": "finish",
+              "value": "Dallas, TX"
+            }
+          ]
+        },
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test(\"At most one routing API call\", () => pm.expect(body.meta.routing_api_calls).to.be.at.most(1));",
+              "pm.test(\"No stop buys more than a 50 gallon tank\", () => body.fuel_stops.forEach(s => pm.expect(s.gallons).to.be.at.most(50)));",
+              "pm.test(\"Total cost equals the sum of stops\", () => {",
+              "  const sum = body.fuel_stops.reduce((a, s) => a + s.cost, 0);",
+              "  pm.expect(Math.abs(sum - body.summary.total_fuel_cost)).to.be.below(0.05);",
+              "});",
+              "pm.test(\"Fuel bought plus starting fuel covers the trip at 10 MPG\", () => pm.expect(Math.abs(body.summary.gallons_purchased + body.vehicle.initial_fuel_gallons - body.route.distance_miles / 10)).to.be.below(0.6));",
+              "console.log(`Total $${body.summary.total_fuel_cost} over ${body.summary.number_of_stops} stops, ${pm.response.responseTime} ms`);",
+              "console.log(\"Map:\", body.map_url);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Error: location outside the USA (400)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan/?start=Paris, France&finish=Denver, CO",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan",
+            ""
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "Paris, France"
+            },
+            {
+              "key": "finish",
+              "value": "Denver, CO"
+            }
+          ]
+        },
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"400\", () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Error: Hawaii is not reachable by road (400)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan/?start=Honolulu, HI&finish=Denver, CO",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan",
+            ""
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "Honolulu, HI"
+            },
+            {
+              "key": "finish",
+              "value": "Denver, CO"
+            }
+          ]
+        },
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"400\", () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Error: invalid parameters (400)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan/?start=Austin, TX&finish=Dallas, TX&corridor_miles=500",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan",
+            ""
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "Austin, TX"
+            },
+            {
+              "key": "finish",
+              "value": "Dallas, TX"
+            },
+            {
+              "key": "corridor_miles",
+              "value": "500"
+            }
+          ]
+        },
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"400\", () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Map page (open in browser)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan/map/?start=New York, NY&finish=Los Angeles, CA",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan",
+            "map",
+            ""
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "New York, NY"
+            },
+            {
+              "key": "finish",
+              "value": "Los Angeles, CA"
+            }
+          ]
+        },
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

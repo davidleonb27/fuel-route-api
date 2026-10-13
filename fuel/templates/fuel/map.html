@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fuel route{% if plan %}: {{ plan.start.label }} to {{ plan.finish.label }}{% endif %}</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    html, body { margin: 0; height: 100%; font: 14px/1.4 system-ui, sans-serif; color: #1f2933; }
+    #map { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; z-index: 1000; top: 12px; right: 12px; width: 320px; max-height: calc(100% - 24px);
+      overflow: auto; background: #fff; border-radius: 10px; box-shadow: 0 4px 18px rgba(0,0,0,.18); padding: 14px 16px;
+    }
+    .panel h1 { font-size: 16px; margin: 0 0 4px; }
+    .muted { color: #616e7c; }
+    .totals { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+    .totals div { background: #f5f7fa; border-radius: 8px; padding: 8px; }
+    .totals strong { display: block; font-size: 18px; }
+    ol { padding-left: 20px; margin: 0; }
+    li { margin-bottom: 8px; }
+    .error { padding: 24px; color: #b42318; }
+    @media (max-width: 600px) { .panel { left: 12px; right: 12px; width: auto; top: auto; bottom: 12px; max-height: 45%; } }
+  </style>
+</head>
+<body>
+{% if error %}
+  <div class="error"><h1>Could not build this route</h1><p>{{ error }}</p></div>
+{% else %}
+  <div id="map"></div>
+  <div class="panel">
+    <h1>{{ plan.start.label }} &rarr; {{ plan.finish.label }}</h1>
+    <div class="muted">{{ plan.route.distance_miles }} mi &middot; {{ plan.route.duration_hours }} h driving</div>
+    <div class="totals">
+      <div><span class="muted">Fuel cost</span><strong>${{ plan.summary.total_fuel_cost }}</strong></div>
+      <div><span class="muted">Gallons</span><strong>{{ plan.summary.gallons_purchased }}</strong></div>
+      <div><span class="muted">Stops</span><strong>{{ plan.summary.number_of_stops }}</strong></div>
+      <div><span class="muted">Avg $/gal</span><strong>{{ plan.summary.average_price_per_gallon|default:"-" }}</strong></div>
+    </div>
+    <ol>
+      {% for stop in plan.fuel_stops %}
+        <li>
+          <strong>{{ stop.station.name }}</strong><br>
+          <span class="muted">{{ stop.station.city }}, {{ stop.station.state }} &middot; mile {{ stop.route_mile }}</span><br>
+          {{ stop.gallons }} gal @ ${{ stop.station.price_per_gallon }} = <strong>${{ stop.cost }}</strong>
+        </li>
+      {% endfor %}
+    </ol>
+  </div>
+  {{ plan.geojson|json_script:"plan-geojson" }}
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const data = JSON.parse(document.getElementById("plan-geojson").textContent);
+    const map = L.map("map");
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18, attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+    const colors = { start: "#0e9f6e", finish: "#c81e1e", fuel_stop: "#1c64f2" };
+    const layer = L.geoJSON(data, {
+      style: { color: "#1c64f2", weight: 4, opacity: 0.8 },
+      pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+        radius: feature.properties.kind === "fuel_stop" ? 8 : 7,
+        color: "#fff", weight: 2, fillOpacity: 1, fillColor: colors[feature.properties.kind],
+      }),
+      onEachFeature: (feature, marker) => {
+        const p = feature.properties;
+        if (p.kind === "route") return;
+        const esc = (v) => String(v).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+        marker.bindTooltip(p.kind === "fuel_stop"
+          ? `${p.sequence}. ${esc(p.name)}<br>${p.gallons} gal @ $${p.price_per_gallon} = $${p.cost}`
+          : `${p.kind}: ${esc(p.label)}`);
+      },
+    }).addTo(map);
+    map.fitBounds(layer.getBounds(), { padding: [30, 30] });
+  </script>
+{% endif %}
+</body>
+</html>

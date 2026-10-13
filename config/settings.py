@@ -70,13 +70,20 @@ DATABASES = {
     }
 }
 
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "fuel-route-api",
-        "OPTIONS": {"MAX_ENTRIES": 5000},
+# Routes and plans are cached so repeats skip OSRM entirely. The file cache is shared by
+# all gunicorn workers on one host; set REDIS_URL to share it across hosts.
+if REDIS_URL := os.environ.get("REDIS_URL"):
+    CACHES = {
+        "default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": REDIS_URL}
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+            "LOCATION": os.environ.get("CACHE_DIR", BASE_DIR / ".cache"),
+            "OPTIONS": {"MAX_ENTRIES": 5000},
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -91,6 +98,7 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
@@ -109,12 +117,14 @@ SPECTACULAR_SETTINGS = {
         "fuel stops for a vehicle with a 500 mile range at 10 MPG."
     ),
     "VERSION": "1.0.0",
+    "PREPROCESSING_HOOKS": ["fuel.schema.hide_slashless_aliases"],
 }
 
 FUEL = {
     "VEHICLE_RANGE_MILES": float(os.environ.get("VEHICLE_RANGE_MILES", 500)),
     "VEHICLE_MPG": float(os.environ.get("VEHICLE_MPG", 10)),
     "CORRIDOR_MILES": float(os.environ.get("FUEL_CORRIDOR_MILES", 10)),
+    "STOP_COST_USD": float(os.environ.get("FUEL_STOP_COST_USD", 15)),
     "ORIGIN_RADIUS_MILES": float(os.environ.get("FUEL_ORIGIN_RADIUS_MILES", 25)),
     "ROUTE_SAMPLE_MILES": 0.5,
     "PLAN_CACHE_SECONDS": int(os.environ.get("PLAN_CACHE_SECONDS", 60 * 60 * 24)),
@@ -126,6 +136,7 @@ FUEL = {
     "HTTP_TIMEOUT_SECONDS": float(os.environ.get("HTTP_TIMEOUT_SECONDS", 15)),
     "PLACES_FILE": BASE_DIR / "data" / "us_places.csv.gz",
     "FUEL_PRICES_FILE": BASE_DIR / "data" / "fuel-prices-for-be-assessment.csv",
+    "STATION_GEOCODES_FILE": BASE_DIR / "data" / "station_geocodes.csv",
 }
 
 LOGGING = {

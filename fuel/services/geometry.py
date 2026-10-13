@@ -47,30 +47,38 @@ def resample_route(coordinates, step_miles: float, total_miles: float | None = N
     return np.interp(marks, cumulative, lat), np.interp(marks, cumulative, lng), marks
 
 
-def simplify(coordinates, tolerance_degrees: float):
-    """Iterative Ramer-Douglas-Peucker to shrink the polyline sent to clients."""
+def simplify(coordinates, tolerance_degrees: float) -> list[list[float]]:
+    """Ramer-Douglas-Peucker, vectorised one recursion level at a time."""
     points = np.asarray(coordinates, dtype=float)
-    if len(points) < 3:
-        return points.tolist()
-    keep = np.zeros(len(points), dtype=bool)
+    n = len(points)
+    if n < 3:
+        return points.round(5).tolist()
+
+    keep = np.zeros(n, dtype=bool)
     keep[[0, -1]] = True
-    stack = [(0, len(points) - 1)]
-    while stack:
-        first, last = stack.pop()
-        if last - first < 2:
-            continue
-        start, end = points[first], points[last]
-        inner = points[first + 1 : last]
-        direction = end - start
-        norm = np.hypot(*direction)
-        if norm == 0:
-            distances = np.hypot(*(inner - start).T)
-        else:
-            offset = inner - start
-            distances = np.abs(direction[0] * offset[:, 1] - direction[1] * offset[:, 0]) / norm
-        index = int(np.argmax(distances))
-        if distances[index] > tolerance_degrees:
-            split = first + 1 + index
-            keep[split] = True
-            stack.extend(((first, split), (split, last)))
+    candidates = np.arange(1, n - 1)  # interior points of segments not yet settled
+    while candidates.size:
+        bounds = np.flatnonzero(keep)
+        segment = np.searchsorted(bounds, candidates, side="right") - 1
+        first, last = bounds[segment], bounds[segment + 1]
+        start = points[first]
+        direction = points[last] - start
+        offset = points[candidates] - start
+        norm = np.hypot(direction[:, 0], direction[:, 1])
+        cross = np.abs(direction[:, 0] * offset[:, 1] - direction[:, 1] * offset[:, 0])
+        distance = np.where(
+            norm > 0, cross / np.where(norm > 0, norm, 1), np.hypot(offset[:, 0], offset[:, 1])
+        )
+
+        # Per-segment maximum: candidates are sorted, so segments are contiguous runs.
+        run_starts = np.flatnonzero(np.r_[True, segment[1:] != segment[:-1]])
+        run_max = np.maximum.reduceat(distance, run_starts)
+        run_of = np.repeat(np.arange(run_starts.size), np.diff(np.r_[run_starts, segment.size]))
+        splitting = run_max > tolerance_degrees
+        is_max = (distance == run_max[run_of]) & splitting[run_of]
+        _, first_hit = np.unique(run_of[is_max], return_index=True)
+        keep[candidates[np.flatnonzero(is_max)[first_hit]]] = True
+
+        still_open = splitting[run_of] & ~keep[candidates]
+        candidates = candidates[still_open]
     return points[keep].round(5).tolist()

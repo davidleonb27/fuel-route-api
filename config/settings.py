@@ -118,6 +118,12 @@ SPECTACULAR_SETTINGS = {
     ),
     "VERSION": "1.0.0",
     "PREPROCESSING_HOOKS": ["fuel.schema.hide_slashless_aliases"],
+    # Highlighting a 40 KB response (route geometry) freezes Swagger UI on slower machines.
+    "SWAGGER_UI_SETTINGS": {
+        "syntaxHighlight": False,
+        "displayRequestDuration": True,
+        "defaultModelsExpandDepth": -1,
+    },
 }
 
 FUEL = {

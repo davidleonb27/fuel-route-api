@@ -8,7 +8,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from fuel.models import FuelStation
-from fuel.services.routing import METERS_PER_MILE
+from fuel.services.routing import METERS_PER_MILE, decode_polyline
 
 pytestmark = pytest.mark.django_db
 
@@ -20,6 +20,25 @@ ROUTE_LAT = 40.0
 ROUTE_LNG = np.linspace(-100.0, -84.0, 400)
 
 
+def encode_polyline(coordinates, precision=6):
+    factor, out, prev_lat, prev_lng = 10**precision, [], 0, 0
+    for lng, lat in coordinates:
+        lat_i, lng_i = round(lat * factor), round(lng * factor)
+        for delta in (lat_i - prev_lat, lng_i - prev_lng):
+            value = ~(delta << 1) if delta < 0 else delta << 1
+            while value >= 0x20:
+                out.append(chr((0x20 | (value & 0x1F)) + 63))
+                value >>= 5
+            out.append(chr(value + 63))
+        prev_lat, prev_lng = lat_i, lng_i
+    return "".join(out)
+
+
+def test_decode_polyline_round_trip():
+    points = [(-120.2, 38.5), (-120.95, 40.7), (-126.453, 43.252)]
+    assert decode_polyline(encode_polyline(points)) == pytest.approx(points)
+
+
 def osrm_payload():
     coordinates = [[float(lng), ROUTE_LAT] for lng in ROUTE_LNG]
     miles = 52.9 * (ROUTE_LNG[-1] - ROUTE_LNG[0])
@@ -29,7 +48,7 @@ def osrm_payload():
             {
                 "distance": miles * METERS_PER_MILE,
                 "duration": miles / 60 * 3600,
-                "geometry": {"type": "LineString", "coordinates": coordinates},
+                "geometry": encode_polyline(coordinates),
             }
         ],
     }
@@ -43,6 +62,8 @@ def make_station(opis_id, lng, price, lat=ROUTE_LAT, **extra):
         city="Town",
         state="KS",
         price=Decimal(str(price)),
+        price_min=Decimal(str(price)),
+        price_max=Decimal(str(price)),
         latitude=lat,
         longitude=lng,
         geo_source=FuelStation.GeoSource.CENSUS_PLACE,
@@ -152,6 +173,18 @@ def test_initial_fuel_avoids_needing_a_station_at_the_origin(client):
 
 
 @responses.activate
+def test_unroutable_points_return_422(client, corridor_stations):
+    responses.get(OSRM_URL, status=400, json={"code": "NoRoute", "message": "Impossible route"})
+    response = client.get(reverse("route-plan"), {"start": "40,-100", "finish": "40,-84"})
+    assert response.status_code == 422
+
+
+def test_hawaii_is_rejected_as_unreachable(client):
+    response = client.get(reverse("route-plan"), {"start": "Honolulu, HI", "finish": "Denver, CO"})
+    assert response.status_code == 400
+
+
+@responses.activate
 def test_routing_outage_returns_502(client, corridor_stations):
     responses.get(OSRM_URL, status=503)
     response = client.get(reverse("route-plan"), {"start": "40,-100", "finish": "40,-84"})
@@ -183,3 +216,12 @@ def test_map_page_renders_without_extra_routing_calls(client, corridor_stations)
     assert b"leaflet" in page.content
     assert b"Stop 4" in page.content
     assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_post_without_trailing_slash_is_accepted(client, corridor_stations):
+    responses.get(OSRM_URL, json=osrm_payload())
+    response = client.post(
+        "/api/v1/route-plan", {"start": "40,-100", "finish": "40,-84"}, format="json"
+    )
+    assert response.status_code == 200, response.content

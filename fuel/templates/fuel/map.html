@@ -51,7 +51,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const data = JSON.parse(document.getElementById("plan-geojson").textContent);
-    const map = L.map("map");
+    const map = L.map("map").setView([39.5, -98.35], 4);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 18, attribution: "&copy; OpenStreetMap contributors"
     }).addTo(map);
@@ -71,7 +71,20 @@
           : `${p.kind}: ${esc(p.label)}`);
       },
     }).addTo(map);
-    map.fitBounds(layer.getBounds(), { padding: [30, 30] });
+    const panel = document.querySelector(".panel");
+    const fit = () => {
+      map.invalidateSize();
+      // Keep the route clear of the summary panel: right side on desktop, bottom on phones.
+      const docked = panel.getBoundingClientRect().top > 50;
+      map.fitBounds(layer.getBounds(), {
+        paddingTopLeft: [30, 30],
+        paddingBottomRight: docked ? [30, panel.offsetHeight + 30] : [panel.offsetWidth + 40, 30],
+        maxZoom: 12,
+      });
+    };
+    // Fit again whenever the container changes size (e.g. it was hidden at load).
+    new ResizeObserver(fit).observe(document.getElementById("map"));
+    fit();
   </script>
 {% endif %}
 </body>

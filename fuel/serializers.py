@@ -20,6 +20,17 @@ class RoutePlanRequestSerializer(serializers.Serializer):
         help_text="Fuel already in the tank at departure. Default 0 (start empty).",
     )
 
+    stop_cost = serializers.FloatField(
+        required=False,
+        min_value=0,
+        max_value=500,
+        help_text=(
+            "Dollar cost charged per fuel stop (driver time, detour). 0 gives the absolute "
+            "cheapest fuel with many small top-ups; the default trades a few cents for "
+            "far fewer stops."
+        ),
+    )
+
     def validate_initial_fuel_gallons(self, value):
         tank = settings.FUEL["VEHICLE_RANGE_MILES"] / settings.FUEL["VEHICLE_MPG"]
         if value > tank:
@@ -28,6 +39,7 @@ class RoutePlanRequestSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         attrs.setdefault("corridor_miles", settings.FUEL["CORRIDOR_MILES"])
+        attrs.setdefault("stop_cost", settings.FUEL["STOP_COST_USD"])
         return attrs
 
 
@@ -47,7 +59,9 @@ class StationSerializer(serializers.Serializer):
     state = serializers.CharField()
     lat = serializers.FloatField()
     lng = serializers.FloatField()
-    price_per_gallon = serializers.FloatField()
+    price_per_gallon = serializers.FloatField(help_text="Median of the stop's listed prices")
+    listed_price_range = serializers.ListField(child=serializers.FloatField())
+    price_listings = serializers.IntegerField(help_text="Rows for this stop in the price file")
 
 
 class FuelStopSerializer(serializers.Serializer):

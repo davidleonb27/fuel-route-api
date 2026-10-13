@@ -3,7 +3,12 @@ import random
 
 import pytest
 
-from fuel.services.optimizer import Candidate, InfeasibleRouteError, plan_purchases
+from fuel.services.optimizer import (
+    Candidate,
+    InfeasibleRouteError,
+    plan_purchases,
+    plan_purchases_with_stop_cost,
+)
 
 
 def cost(purchases):
@@ -90,3 +95,52 @@ def test_greedy_matches_exact_dp(seed):
     plan = plan_purchases(candidates, route_miles, range_miles)
     assert sum(p.miles_of_fuel for p in plan) == pytest.approx(route_miles)
     assert cost(plan) == pytest.approx(brute_force_cost(candidates, route_miles, range_miles, step))
+
+
+def random_route(seed, range_miles=200):
+    rng = random.Random(seed)
+    route_miles = rng.choice(range(250, 1500, 10))
+    miles = sorted({0, *rng.sample(range(5, route_miles), k=min(60, route_miles // 10))})
+    candidates = [Candidate(m, round(rng.uniform(2.5, 5.5), 3), m) for m in miles]
+    feasible = all(b - a <= range_miles for a, b in itertools.pairwise(miles + [route_miles]))
+    return candidates, route_miles, feasible
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_stop_cost_dp_with_zero_cost_matches_greedy(seed):
+    candidates, route_miles, feasible = random_route(seed)
+    if not feasible:
+        with pytest.raises(InfeasibleRouteError):
+            plan_purchases_with_stop_cost(candidates, route_miles, 200, mpg=10, stop_cost=0)
+        return
+    greedy = plan_purchases(candidates, route_miles, 200)
+    dp = plan_purchases_with_stop_cost(candidates, route_miles, 200, mpg=10, stop_cost=0)
+    assert cost(dp) == pytest.approx(cost(greedy))
+    assert sum(p.miles_of_fuel for p in dp) == pytest.approx(route_miles)
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_stop_cost_trades_a_little_fuel_for_fewer_stops(seed):
+    candidates, route_miles, feasible = random_route(seed)
+    if not feasible:
+        return
+    stop_cost = 15.0
+    greedy = plan_purchases(candidates, route_miles, 200)
+    dp = plan_purchases_with_stop_cost(candidates, route_miles, 200, mpg=10, stop_cost=stop_cost)
+
+    def objective(plan):
+        return cost(plan) / 10 + stop_cost * len(plan)
+
+    assert len(dp) <= len(greedy)
+    assert objective(dp) <= objective(greedy) + 1e-6
+    assert all(p.miles_of_fuel <= 200 for p in dp)
+    assert sum(p.miles_of_fuel for p in dp) == pytest.approx(route_miles)
+
+
+def test_stop_cost_reports_fuel_on_arrival():
+    stations = [Candidate(0, 3.0, "A"), Candidate(450, 5.0, "B")]
+    plan = plan_purchases_with_stop_cost(stations, 700, 500, mpg=10, stop_cost=5)
+    assert [(p.candidate.ref, p.miles_of_fuel, p.fuel_on_arrival_miles) for p in plan] == [
+        ("A", 500, 0),
+        ("B", 200, 50),
+    ]

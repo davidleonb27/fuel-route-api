@@ -11,7 +11,7 @@ from fuel.models import FuelStation
 
 from .geocoding import Location, geocode
 from .geometry import arc_for_chord, chord_for_arc, resample_route, simplify, to_xyz
-from .optimizer import Candidate, plan_purchases
+from .optimizer import Candidate, plan_purchases, plan_purchases_with_stop_cost
 from .routing import Route, RoutingProvider, get_route
 from .stations import station_index
 
@@ -22,6 +22,7 @@ MILES_PER_DEGREE_LAT = 69.0
 class PlanOptions:
     corridor_miles: float
     initial_fuel_gallons: float = 0.0
+    stop_cost: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ def stations_along_route(route: Route, corridor_miles: float) -> list[StationOnR
 def _cache_key(start: Location, finish: Location, options: PlanOptions) -> str:
     raw = (
         f"{start.lat:.5f},{start.lng:.5f}|{finish.lat:.5f},{finish.lng:.5f}|"
-        f"{options.corridor_miles:.2f}|{options.initial_fuel_gallons:.2f}|"
+        f"{options.corridor_miles:.2f}|{options.initial_fuel_gallons:.2f}|{options.stop_cost:.2f}|"
         f"{settings.FUEL['VEHICLE_RANGE_MILES']}|{settings.FUEL['VEHICLE_MPG']}"
     )
     return "plan:v1:" + hashlib.sha256(raw.encode()).hexdigest()
@@ -122,7 +123,17 @@ def _optimise(start: Location, finish: Location, route: Route, options: PlanOpti
             mile = 0.0
         candidates.append(Candidate(mile, float(index.price[station.row]), station))
 
-    purchases = plan_purchases(candidates, route.distance_miles, range_miles, start_fuel_miles)
+    if options.stop_cost > 0:
+        purchases = plan_purchases_with_stop_cost(
+            candidates,
+            route.distance_miles,
+            range_miles,
+            mpg=mpg,
+            stop_cost=options.stop_cost,
+            start_fuel_miles=start_fuel_miles,
+        )
+    else:
+        purchases = plan_purchases(candidates, route.distance_miles, range_miles, start_fuel_miles)
 
     station_ids = [int(index.ids[p.candidate.ref.row]) for p in purchases]
     stations = FuelStation.objects.in_bulk(station_ids)
@@ -146,6 +157,11 @@ def _optimise(start: Location, finish: Location, route: Route, options: PlanOpti
                     "lat": round(station.latitude, 6),
                     "lng": round(station.longitude, 6),
                     "price_per_gallon": round(price, 3),
+                    "listed_price_range": [
+                        round(float(station.price_min), 3),
+                        round(float(station.price_max), 3),
+                    ],
+                    "price_listings": station.price_observations,
                 },
                 "route_mile": round(purchase.candidate.ref.mile, 1),
                 "off_route_miles": round(purchase.candidate.ref.off_route_miles, 1),
@@ -156,7 +172,7 @@ def _optimise(start: Location, finish: Location, route: Route, options: PlanOpti
         )
 
     trip_gallons = route.distance_miles / mpg
-    geometry = simplify(route.coordinates, tolerance_degrees=0.0005)
+    geometry = simplify(route.coordinates, tolerance_degrees=0.001)
     return {
         "start": start.as_dict(),
         "finish": finish.as_dict(),
@@ -165,6 +181,7 @@ def _optimise(start: Location, finish: Location, route: Route, options: PlanOpti
             "mpg": mpg,
             "tank_gallons": range_miles / mpg,
             "initial_fuel_gallons": round(start_fuel_miles / mpg, 2),
+            "stop_cost": options.stop_cost,
         },
         "route": {
             "distance_miles": round(route.distance_miles, 1),

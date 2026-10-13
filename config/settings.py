@@ -70,17 +70,26 @@ DATABASES = {
     }
 }
 
-# Routes and plans are cached so repeats skip OSRM entirely. The file cache is shared by
-# all gunicorn workers on one host; set REDIS_URL to share it across hosts.
+# Routes and plans are cached so repeats skip OSRM entirely. Memory is fastest for a single
+# process (runserver); set CACHE_DIR to share a file cache between gunicorn workers, or
+# REDIS_URL to share it across hosts.
 if REDIS_URL := os.environ.get("REDIS_URL"):
     CACHES = {
         "default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": REDIS_URL}
     }
-else:
+elif CACHE_DIR := os.environ.get("CACHE_DIR"):
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
-            "LOCATION": os.environ.get("CACHE_DIR", BASE_DIR / ".cache"),
+            "LOCATION": CACHE_DIR,
+            "OPTIONS": {"MAX_ENTRIES": 5000},
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "fuel-route-api",
             "OPTIONS": {"MAX_ENTRIES": 5000},
         }
     }

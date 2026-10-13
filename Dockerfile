@@ -19,7 +19,8 @@ RUN DJANGO_DEBUG=true python manage.py migrate --noinput \
     && DJANGO_DEBUG=true python manage.py collectstatic --noinput
 
 ENV DJANGO_DEBUG=false \
-    DJANGO_ALLOWED_HOSTS=*
+    DJANGO_ALLOWED_HOSTS=* \
+    CACHE_DIR=/app/.cache
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/')"

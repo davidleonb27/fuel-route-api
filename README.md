@@ -129,8 +129,9 @@ start, finish ──► geocode (offline) ──► 1 OSRM call ──► statio
    The vehicle starts empty by default and fuels at a station within 25 route miles of the start.
    Pass `initial_fuel_gallons` to start with fuel.
 6. **Caching.** Routes and finished plans are cached, so a repeated request (and the map page,
-   which reuses the plan) answers in about 10 ms with zero external calls. The default file cache
-   is shared by all gunicorn workers. Set `REDIS_URL` to share it across machines.
+   which reuses the plan) answers in about 10 ms with zero external calls. The cache is in memory by
+   default. Set `CACHE_DIR` to share a file cache between gunicorn workers (the Docker image
+   does), or `REDIS_URL` to share it across machines.
 7. **Startup.** `config/wsgi.py` warms up the SciPy import and both indexes. With
    `gunicorn --preload` this happens once in the master process, so no request pays the
    ~2 second cold start.
@@ -197,7 +198,8 @@ All optional, via environment variables:
 | `FUEL_ORIGIN_RADIUS_MILES` | `25` |
 | `VEHICLE_RANGE_MILES` / `VEHICLE_MPG` | `500` / `10` |
 | `PLAN_CACHE_SECONDS` | `86400` |
-| `REDIS_URL` | unset (file cache in `.cache/`) |
+| `CACHE_DIR` | unset (in-memory cache); `/app/.cache` in Docker |
+| `REDIS_URL` | unset |
 | `API_ANON_THROTTLE` | `120/min` |
 
 ## Quality

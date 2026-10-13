@@ -12,10 +12,14 @@ from fuel.models import FuelStation
 from .geocoding import Location, geocode
 from .geometry import arc_for_chord, chord_for_arc, resample_route, simplify, to_xyz
 from .optimizer import Candidate, plan_purchases, plan_purchases_with_stop_cost
-from .routing import Route, RoutingProvider, get_route
+from .routing import Route, RoutingProvider, get_route, route_cache_key
 from .stations import station_index
 
 MILES_PER_DEGREE_LAT = 69.0
+# ~500 m keeps the JSON light (the line is most of the payload); the map page redraws
+# from the cached route at ~100 m.
+API_GEOMETRY_TOLERANCE = 0.005
+MAP_GEOMETRY_TOLERANCE = 0.001
 
 
 @dataclass(frozen=True)
@@ -172,7 +176,7 @@ def _optimise(start: Location, finish: Location, route: Route, options: PlanOpti
         )
 
     trip_gallons = route.distance_miles / mpg
-    geometry = simplify(route.coordinates, tolerance_degrees=0.001)
+    geometry = simplify(route.coordinates, tolerance_degrees=API_GEOMETRY_TOLERANCE)
     return {
         "start": start.as_dict(),
         "finish": finish.as_dict(),
@@ -234,3 +238,17 @@ def _geojson(start: Location, finish: Location, geometry, stops) -> dict:
             )
         )
     return {"type": "FeatureCollection", "features": features}
+
+
+def detailed_route_geometry(plan: dict) -> list[list[float]] | None:
+    """Finer line for the map page, from the cached route (no external call)."""
+    start, finish = plan["start"], plan["finish"]
+    route_key = route_cache_key((start["lat"], start["lng"]), (finish["lat"], finish["lng"]))
+    if cached := cache.get(f"map-line:{route_key}"):
+        return cached
+    route = cache.get(route_key)
+    if route is None:
+        return None
+    line = simplify(route.coordinates, MAP_GEOMETRY_TOLERANCE)
+    cache.set(f"map-line:{route_key}", line, timeout=settings.FUEL["PLAN_CACHE_SECONDS"])
+    return line

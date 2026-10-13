@@ -87,11 +87,15 @@ class OSRMProvider:
         )
 
 
+def route_cache_key(start: tuple[float, float], finish: tuple[float, float]) -> str:
+    return "route:v2:{:.5f},{:.5f};{:.5f},{:.5f}".format(*start, *finish)
+
+
 def get_route(
     start: tuple[float, float], finish: tuple[float, float], provider: RoutingProvider | None = None
 ) -> tuple[Route, int]:
     """Cached routing; returns the route and how many external calls were made (0 or 1)."""
-    key = "route:v2:{:.5f},{:.5f};{:.5f},{:.5f}".format(*start, *finish)
+    key = route_cache_key(start, finish)
     if cached := cache.get(key):
         return cached, 0
     route = (provider or OSRMProvider()).route(start, finish)

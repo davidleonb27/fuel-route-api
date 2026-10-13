@@ -13,7 +13,7 @@ from .models import FuelStation
 from .serializers import RoutePlanRequestSerializer, RoutePlanResponseSerializer
 from .services.geocoding import GeocodingError
 from .services.optimizer import InfeasibleRouteError
-from .services.planner import PlanOptions, build_plan
+from .services.planner import PlanOptions, build_plan, detailed_route_geometry
 from .services.routing import NoRouteError, RoutingError
 
 logger = logging.getLogger(__name__)
@@ -101,4 +101,10 @@ def route_map(request):
         plan, _ = run_plan(request.GET)
     except APIException as exc:
         return render(request, "fuel/map.html", {"error": exc.detail}, status=exc.status_code)
+    if detailed := detailed_route_geometry(plan):
+        line = plan["geojson"]["features"][0]
+        plan["geojson"]["features"][0] = {
+            **line,
+            "geometry": {**line["geometry"], "coordinates": detailed},
+        }
     return render(request, "fuel/map.html", {"plan": plan})
